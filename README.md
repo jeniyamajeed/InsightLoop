@@ -262,5 +262,3 @@ insightloop/
 ```
 
 ---
-
-**Built for the Fantacode technical assessment.**
