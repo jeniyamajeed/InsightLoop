@@ -1,0 +1,102 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: insightloop-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [insightloop]
+
+  auth-service:
+    build: ./services/auth-service
+    container_name: insightloop-auth
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/insightloop_auth?useSSL=false&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS}
+    ports: ["8081:8081"]
+    depends_on:
+      mysql: { condition: service_healthy }
+    networks: [insightloop]
+
+  feedback-service:
+    build: ./services/feedback-service
+    container_name: insightloop-feedback
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/insightloop_feedback?useSSL=false&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+    ports: ["8082:8082"]
+    depends_on:
+      mysql: { condition: service_healthy }
+    networks: [insightloop]
+
+  validation-service:
+    build: ./services/validation-service
+    container_name: insightloop-validation
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/insightloop_validation?useSSL=false&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      ESCALATION_SERVICE_URL: http://escalation-service:8084
+      FEEDBACK_SERVICE_URL: http://feedback-service:8082
+    ports: ["8083:8083"]
+    depends_on:
+      mysql: { condition: service_healthy }
+    networks: [insightloop]
+
+  escalation-service:
+    build: ./services/escalation-service
+    container_name: insightloop-escalation
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/insightloop_escalation?useSSL=false&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      INSIGHTLOOP_VALIDATION_SERVICE_URL: http://validation-service:8083
+    ports: ["8084:8084"]
+    depends_on:
+      mysql: { condition: service_healthy }
+    networks: [insightloop]
+
+  api-gateway:
+    build: ./services/api-gateway
+    container_name: insightloop-gateway
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      AUTH_SERVICE_URL: http://auth-service:8081
+      FEEDBACK_SERVICE_URL: http://feedback-service:8082
+      VALIDATION_SERVICE_URL: http://validation-service:8083
+      ESCALATION_SERVICE_URL: http://escalation-service:8084
+    ports: ["8090:8080"]
+    depends_on: [auth-service, feedback-service, validation-service, escalation-service]
+    networks: [insightloop]
+
+  frontend:
+    build: ./frontend
+    container_name: insightloop-frontend
+    ports: ["4200:80"]
+    depends_on: [api-gateway]
+    networks: [insightloop]
+
+volumes:
+  mysql_data:
+
+networks:
+  insightloop:
+    driver: bridge
