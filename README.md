@@ -6,6 +6,8 @@ InsightLoop is a customer-outcome validation platform that complements post-inte
 
 This repository is a full working microservices implementation built for the technical assessment. It satisfies the required User Management & RBAC scope and extends it with the InsightLoop domain (interactions, commitments, delayed validation, escalations, analytics).
 
+[📊 InsightLoop Presentation](./InsightLoop_Presentation.pptx)
+
 ---
 
 ## 🛠️ Technology Stack
