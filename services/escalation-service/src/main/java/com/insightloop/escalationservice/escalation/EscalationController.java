@@ -40,7 +40,7 @@ public class EscalationController {
             Integer slaHours,
             String status) {}
 
-    public record UpdateEscalationRequest(String status, Long assigneeUserId, String priority) {}
+    public record UpdateEscalationRequest(String status, Long assigneeUserId, String priority, String customerName, String summary) {}
 
     @GetMapping
     @PreAuthorize("hasAnyRole('AGENT','ADMIN','MANAGER')")
@@ -61,50 +61,80 @@ public class EscalationController {
     @PreAuthorize("hasAnyRole('AGENT','ADMIN','MANAGER')")
     public Escalation update(@PathVariable Long id, 
                              @RequestBody UpdateEscalationRequest req,
+                             @RequestParam(value = "sync", defaultValue = "true") boolean sync,
                              @RequestHeader(value = org.springframework.http.HttpHeaders.AUTHORIZATION, required = false) String authHeader) {
         Escalation e = repo.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        String targetStatus = null;
         if (req.status() != null) {
             e.setStatus(req.status());
             if ("RESOLVED".equals(req.status())) {
                 e.setClosedAt(Instant.now());
-                updateCommitmentStatus(e.getCommitmentId(), "RESOLVED", authHeader);
+                targetStatus = "RESOLVED";
             } else if ("OPEN".equals(req.status()) || "IN_PROGRESS".equals(req.status())) {
-                updateCommitmentStatus(e.getCommitmentId(), "ESCALATED", authHeader);
+                targetStatus = "ESCALATED";
             }
         }
         if (req.assigneeUserId() != null) e.setAssigneeUserId(req.assigneeUserId());
         if (req.priority() != null) e.setPriority(req.priority());
-        return repo.save(e);
+        if (req.customerName() != null) e.setCustomerName(req.customerName());
+        if (req.summary() != null) e.setSummary(req.summary());
+
+        e = repo.save(e);
+        if (sync) {
+            updateCommitment(e.getCommitmentId(), req.customerName(), req.summary(), targetStatus, authHeader);
+        }
+        return e;
     }
 
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
     public Escalation edit(@PathVariable Long id, 
                            @Valid @RequestBody EditEscalationRequest req,
+                           @RequestParam(value = "sync", defaultValue = "true") boolean sync,
                            @RequestHeader(value = org.springframework.http.HttpHeaders.AUTHORIZATION, required = false) String authHeader) {
         Escalation e = repo.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
         e.setCustomerName(req.customerName());
         e.setSummary(req.summary());
         if (req.priority() != null) e.setPriority(req.priority());
         if (req.slaHours() != null) e.setSlaHours(req.slaHours());
+        String targetStatus = null;
         if (req.status() != null) {
             e.setStatus(req.status());
             if ("RESOLVED".equals(req.status())) {
                 e.setClosedAt(Instant.now());
-                updateCommitmentStatus(e.getCommitmentId(), "RESOLVED", authHeader);
+                targetStatus = "RESOLVED";
             } else if ("OPEN".equals(req.status()) || "IN_PROGRESS".equals(req.status())) {
-                updateCommitmentStatus(e.getCommitmentId(), "ESCALATED", authHeader);
+                targetStatus = "ESCALATED";
             }
         }
-        return repo.save(e);
+        e = repo.save(e);
+        if (sync) {
+            updateCommitment(e.getCommitmentId(), req.customerName(), req.summary(), targetStatus, authHeader);
+        }
+        return e;
     }
 
-    private void updateCommitmentStatus(Long commitmentId, String status, String authHeader) {
+    private void updateCommitment(Long commitmentId, String customerName, String description, String status, String authHeader) {
+        if (customerName == null && description == null && status == null) return;
         try {
+            java.util.Map<String, Object> body = new java.util.HashMap<>();
+            if (customerName != null) body.put("customerName", customerName);
+            if (description != null) {
+                String cleanDesc = description;
+                if (cleanDesc.startsWith("Unresolved commitment: ")) {
+                    cleanDesc = cleanDesc.substring("Unresolved commitment: ".length());
+                }
+                body.put("description", cleanDesc);
+            }
+            if (status != null) body.put("status", status);
+
             validationClient.put()
-                    .uri("/commitments/" + commitmentId)
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/commitments/" + commitmentId)
+                            .queryParam("sync", "false")
+                            .build())
                     .header(org.springframework.http.HttpHeaders.AUTHORIZATION, authHeader == null ? "" : authHeader)
-                    .bodyValue(java.util.Map.of("status", status))
+                    .bodyValue(body)
                     .retrieve()
                     .toBodilessEntity()
                     .block();
@@ -115,11 +145,23 @@ public class EscalationController {
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
-    public ResponseEntity<Void> delete(@PathVariable Long id) {
-        if (!repo.existsById(id)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Escalation not found");
-        }
-        repo.deleteById(id);
+    public ResponseEntity<Void> delete(@PathVariable Long id,
+                                        @RequestHeader(value = org.springframework.http.HttpHeaders.AUTHORIZATION, required = false) String authHeader) {
+        Escalation e = repo.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Escalation not found"));
+        
+        try {
+            validationClient.delete()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/commitments/" + e.getCommitmentId())
+                            .queryParam("sync", "false")
+                            .build())
+                    .header(org.springframework.http.HttpHeaders.AUTHORIZATION, authHeader == null ? "" : authHeader)
+                    .retrieve()
+                    .toBodilessEntity()
+                    .block();
+        } catch (Exception ignored) {}
+
+        repo.delete(e);
         return ResponseEntity.noContent().build();
     }
 }

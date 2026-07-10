@@ -81,7 +81,9 @@ public class CommitmentController {
 
     @PutMapping("/commitments/{id}")
     @PreAuthorize("hasAnyRole('AGENT','ADMIN','MANAGER')")
-    public Commitment update(@PathVariable Long id, @Valid @RequestBody UpdateCommitmentRequest req) {
+    public Commitment update(@PathVariable Long id, @Valid @RequestBody UpdateCommitmentRequest req,
+                              @RequestParam(value = "sync", defaultValue = "true") boolean sync,
+                              @RequestHeader(value = org.springframework.http.HttpHeaders.AUTHORIZATION, required = false) String authHeader) {
         Commitment c = repo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
 
@@ -89,21 +91,51 @@ public class CommitmentController {
         if (req.commitmentType() != null) c.setCommitmentType(req.commitmentType());
         if (req.description()    != null) c.setDescription(req.description());
         if (req.dueAt()          != null) c.setDueAt(req.dueAt());
-        if (req.status()         != null) c.setStatus(req.status());
+        if (req.status()         != null) {
+            if ("ESCALATED".equals(req.status()) && c.getLinkedEscalationId() == null) {
+                c.setStatus("UNRESOLVED");
+            } else {
+                c.setStatus(req.status());
+            }
+        }
 
         c = repo.save(c);
         svc.log(c.getId(), "UPDATED", "Commitment updated");
+
+        if (sync && c.getLinkedEscalationId() != null) {
+            svc.syncToEscalation(c, authHeader);
+        }
+
         return c;
     }
 
     @DeleteMapping("/commitments/{id}")
     @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
-    public ResponseEntity<Void> delete(@PathVariable Long id) {
-        if (!repo.existsById(id)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Commitment not found");
+    public ResponseEntity<Void> delete(@PathVariable Long id,
+                                        @RequestParam(value = "sync", defaultValue = "true") boolean sync,
+                                        @RequestHeader(value = org.springframework.http.HttpHeaders.AUTHORIZATION, required = false) String authHeader) {
+        Commitment c = repo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Commitment not found"));
+
+        if (sync && c.getLinkedEscalationId() != null) {
+            svc.deleteEscalation(c.getLinkedEscalationId(), authHeader);
         }
+
         auditRepo.deleteByCommitmentId(id);
-        repo.deleteById(id);
+        repo.delete(c);
         return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/commitments/{id}/escalation")
+    public Commitment unlinkEscalation(@PathVariable Long id) {
+        Commitment c = repo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        c.setLinkedEscalationId(null);
+        if ("ESCALATED".equals(c.getStatus())) {
+            c.setStatus("UNRESOLVED");
+        }
+        c = repo.save(c);
+        svc.log(c.getId(), "UNLINKED_ESCALATION", "Linked escalation removed");
+        return c;
     }
 }

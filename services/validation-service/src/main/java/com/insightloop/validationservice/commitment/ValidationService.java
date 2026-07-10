@@ -91,6 +91,39 @@ public class ValidationService {
         audit.save(a);
     }
 
+    public void syncToEscalation(Commitment c, String authHeader) {
+        if (c.getLinkedEscalationId() == null) return;
+        try {
+            java.util.Map<String, Object> body = new java.util.HashMap<>();
+            body.put("customerName", c.getCustomerName());
+            body.put("summary", "Unresolved commitment: " + c.getDescription());
+            if ("RESOLVED".equals(c.getStatus())) {
+                body.put("status", "RESOLVED");
+            }
+            escalationClient.patch()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/escalations/" + c.getLinkedEscalationId())
+                            .queryParam("sync", "false")
+                            .build())
+                    .header(HttpHeaders.AUTHORIZATION, authHeader == null ? "" : authHeader)
+                    .bodyValue(body)
+                    .retrieve()
+                    .toBodilessEntity()
+                    .block();
+        } catch (Exception ignored) {}
+    }
+
+    public void deleteEscalation(Long escalationId, String authHeader) {
+        try {
+            escalationClient.delete()
+                    .uri("/escalations/" + escalationId)
+                    .header(HttpHeaders.AUTHORIZATION, authHeader == null ? "" : authHeader)
+                    .retrieve()
+                    .toBodilessEntity()
+                    .block();
+        } catch (Exception ignored) {}
+    }
+
     public Map<String, Object> dashboardSummary(String authHeader) {
         int csatImmediate = 84;
         try {
